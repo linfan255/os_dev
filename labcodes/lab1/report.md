@@ -23,3 +23,78 @@
   4. 自己找一个bootloader或内核中的代码位置，设置断点并进行测试。
 	
 	此题较为简单，根据gdbinit里面的内容，make debug即可。
+
+## 习题3
+* [分析bootloader进入保护模式的过程，需要了解如下：]
+  1. 为何开启A20,以及如何开启A20
+  2. 如何初始化GDT表
+  3. 如何使能进入保护模式
+  
+### 为何开启A20,以及如何开启A20
+  
+  A20的存在实际上是历史遗留问题，在最开始的时候（8086/8088）中只有20根地址线，因此只能寻址2^20即1M的大小。但是在8086/8088中的寄存器只有16位，如何让16位的寄存器寻址1M的空间？解决方法是使用“基地址：地址偏移量”的形式来表示，即让一个寄存器左移4位，加上另外一个表示地址偏移量的寄存器，以此来表示地址，这样可以表示的最大地址就是“0x0ffff0 : 0xffff”，即0x0ffff0 + 0xffff = 0x10ffef。但显然这个值已经大于1MB了，而整个空间最多也只有1MB，为了使得在访问地址大于1MB时不产生地址越界的异常，规定超过1MB的地址从0开始重新寻址（回卷）。
+  
+  随着技术发展，到了80286时代，地址线发展成为24根。可访问的地址空间为2^24，远远多于0x10ffef。但是为了向下兼容，依旧规定在实模式下访问超过1MB的内容要回卷。但是在80286中0x10ffef这个地址显然是不越界的。为了解决这种兼容性问题，专门用键盘控制器多余的一根地址线来控制第21个bit（从0开始数是第20个），这就是A20。当A20禁止时，第21个bit被禁用，此时访问0x100000~0x10ffef会回卷。当A20开启时，就可以实际访问0x100000~0x10ffef这块地址了。
+  
+  以上的全都是针对实模式下，当进入保护模式后，A20的开启与否依旧有影响。A20开启的时候，第20位bit可以为1也可以是0。当A20禁止时，只能为0,这意味这在80286下，永远只能访问奇数兆的内存。所以进入保护模式后，A20依旧要开启。
+  
+  理论上讲，我们只要操作8042芯片的输出端口（64h）的bit 1，就可以控制A20 Gate，但实际上，当你准备向8042的输入缓冲区里写数据时，可能里面还有其它数据没有处理，所以，我们要首先禁止键盘操作，同时等待数据缓冲区中没有数据以后，才能真正地去操作8042打开或者关闭A20 Gate。操作步骤如下
+  
+  1. 等待8042 Input buffer为空；
+  2. 发送Write 8042 Output Port （P2）命令到8042 Input buffer；
+  3. 等待8042 Input buffer为空；
+  4. 将8042 Output Port（P2）得到字节的第2位置1，然后写入8042 Input buffer；
+  
+  相关的代码如下
+  
+```
+seta20.1:
+    inb $0x64, %al                                  # Wait for not busy(8042 input buffer empty).
+    testb $0x2, %al
+    jnz seta20.1
+
+    movb $0xd1, %al                                 # 0xd1 -> port 0x64
+    outb %al, $0x64                                 # 0xd1 means: write data to 8042's P2 port
+
+seta20.2:
+    inb $0x64, %al                                  # Wait for not busy(8042 input buffer empty).
+    testb $0x2, %al
+    jnz seta20.2
+
+    movb $0xdf, %al                                 # 0xdf -> port 0x60
+    outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
+```
+  
+### 如何初始化GDT表
+  gdt表的地址保存在寄存器gdtr当中，可以利用lgdt来加载gdt表的地址到寄存器当中。即可完成了GDT的初始化
+
+  ```
+  lgdt gdtdesc
+  ```
+
+### 如何使能进入保护模式
+  cr0寄存器当中的pe位是控制是否进入保护模式，将该位使能即可。
+  
+  ```
+  movl %cr0, %eax
+  orl $CR0_PE_ON, %eax
+  movl %eax, %cr0
+  ```
+  
+  然后设置一些段寄存器
+  
+  ```
+  movw $PROT_MODE_DSEG, %ax                       # Our data segment selector
+  movw %ax, %ds                                   # -> DS: Data Segment
+  movw %ax, %es                                   # -> ES: Extra Segment
+  movw %ax, %fs                                   # -> FS
+  movw %ax, %gs                                   # -> GS
+  movw %ax, %ss                                   # -> SS: Stack Segment
+  ```
+  
+  最后设置ebp esp堆栈寄存器，进入bootmain
+  
+  ```
+  movl $0x0, %ebp
+  movl $start, %esp
+  ```
