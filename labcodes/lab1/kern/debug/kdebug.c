@@ -302,5 +302,24 @@ print_stackframe(void) {
       *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
       *                   the calling funciton's ebp = ss:[ebp]
       */
+    int depth;
+    uint32_t ebp = read_ebp();
+    uint32_t eip = read_eip();
+
+    for (depth = 0; ebp != 0 && depth < STACKFRAME_DEPTH; ++depth) {
+        cprintf("ebp:0x%x eip:0x%x", ebp, eip);
+
+        uint32_t arg1 = *((uint32_t *)ebp + 2);
+        uint32_t arg2 = *((uint32_t *)ebp + 3);
+        uint32_t arg3 = *((uint32_t *)ebp + 4);
+        uint32_t arg4 = *((uint32_t *)ebp + 5);
+        cprintf(" arg1:0x%x arg2:0x%x arg3:0x%x arg4:0x%x\n", arg1, arg2, arg3, arg4);
+
+        // because eip point to the "next" instruction
+        print_debuginfo(eip - 1);
+
+        eip = *((uint32_t *)ebp + 1);
+        ebp = *((uint32_t *)ebp);
+    }
 }
 

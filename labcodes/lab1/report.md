@@ -98,3 +98,69 @@ seta20.2:
   movl $0x0, %ebp
   movl $start, %esp
   ```
+  
+## 练习4：分析bootloader加载ELF格式的OS的过程。
+
+通过阅读bootmain.c，了解bootloader如何加载ELF文件。通过分析源代码和通过qemu来运行并调试bootloader&OS
+
+### bootloader如何读取硬盘扇区的？
+  一般来讲，读取硬盘扇区主要分为以下几个步骤：
+  
+  1. 等待磁盘准备就绪，相关代码：
+  
+  ```
+  /* waitdisk - wait for disk ready */
+  static void
+  waitdisk(void) {
+      while ((inb(0x1F7) & 0xC0) != 0x40)
+          /* do nothing */;
+  }
+  ```
+  其中0x1f7端口是状态和命令寄存器，如果不是忙状态就从0x1f0读数据
+  
+  2. 发出读取硬盘扇区的命令
+  
+  ```
+  outb(0x1F2, 1);                         // count = 1
+  outb(0x1F3, secno & 0xFF);
+  outb(0x1F4, (secno >> 8) & 0xFF);
+  outb(0x1F5, (secno >> 16) & 0xFF);
+  outb(0x1F6, ((secno >> 24) & 0xF) | 0xE0);
+  outb(0x1F7, 0x20);                      // cmd 0x20 - read sectors
+  ```
+  
+  其中0x1f2到0x1f6都是设置要读多少个扇区，最后向0x1f7端口发送0x20，表明进行读操作。
+  
+  3. 等待磁盘准备就绪，同1.
+  
+  4. 把磁盘数据读到指定的内存
+  
+  ```
+  insl(0x1F0, dst, SECTSIZE / 4);
+  
+  static inline void
+  insl(uint32_t port, void *addr, int cnt) {
+      asm volatile (
+              "cld;"
+              "repne; insl;"
+              : "=D" (addr), "=c" (cnt)
+              : "d" (port), "0" (addr), "1" (cnt)
+              : "memory", "cc");
+  }
+  ```
+  
+  注意到第三个参数不是长度，而是读取的次数。insl一次读入四个字节，所以要除以4。
+  
+### bootloader是如何加载ELF格式的OS？
+  
+  可以分为以下几个步骤：
+  
+  - 首先从磁盘上将elf header读到地址0x10000处。
+  - 找出第一段program header的地址。
+  - 遍历每个program header，从program header中解析出p_va / p_memsz / p_offset。
+  - 将从p_offset开始的p_memsz个字节读到p_va处。
+  
+## 练习5：实现函数调用堆栈跟踪函数 
+
+  见kern/debug/kdebug.c
+
